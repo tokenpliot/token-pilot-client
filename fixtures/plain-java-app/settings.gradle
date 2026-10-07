@@ -1,0 +1,4 @@
+rootProject.name = 'plain-java-app'
+
+// Stands in for a customer application: it consumes the SDK as a single binary dependency.
+includeBuild('../..')

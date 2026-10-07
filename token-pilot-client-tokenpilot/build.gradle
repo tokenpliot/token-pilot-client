@@ -1,0 +1,17 @@
+description = 'Forwards Token Pilot core ledger events to the Control Plane, with optional Spring Boot auto-configuration.'
+
+// token-pilot-core is compiled for Java 25, so this adapter follows its baseline.
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+}
+
+dependencies {
+    api project(':token-pilot-client')
+    api "cloud.token-pilot:token-pilot-core:${versions.tokenpilot}"
+
+    compileOnly "org.springframework.boot:spring-boot-autoconfigure:${versions.springBoot}"
+
+    testImplementation "org.springframework.boot:spring-boot-autoconfigure:${versions.springBoot}"
+    testImplementation testFixtures(project(':token-pilot-client'))
+    testImplementation "org.springframework.boot:spring-boot-test:${versions.springBoot}"
+}

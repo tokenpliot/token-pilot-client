@@ -1,0 +1,26 @@
+plugins {
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+    mavenLocal {
+        content {
+            includeGroup 'cloud.token-pilot'
+        }
+    }
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+dependencies {
+    implementation 'cloud.token-pilot:token-pilot-client-tokenpilot:0.0.1-SNAPSHOT'
+}
+
+application {
+    mainClass = 'example.ObserveFixture'
+}

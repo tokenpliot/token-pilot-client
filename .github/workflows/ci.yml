@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: token-pilot-client
+
+      # token-pilot-core is not published yet; build it from source through the composite build.
+      - uses: actions/checkout@v4
+        with:
+          repository: tokenpliot/tokenpilot
+          path: tokenpilot
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test
+        working-directory: token-pilot-client
+        run: ./gradlew test --console=plain
+
+      - name: Fixture app compiles against the published shape
+        working-directory: token-pilot-client/fixtures/plain-java-app
+        run: ../../gradlew compileJava --console=plain -PtokenpilotDir=${{ github.workspace }}/tokenpilot

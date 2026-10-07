@@ -1,0 +1,11 @@
+rootProject.name = 'token-pilot-client-java'
+
+include 'token-pilot-client'
+include 'token-pilot-client-tokenpilot'
+
+// token-pilot-core is not published yet. When a tokenpilot checkout is present (default ../tokenpilot,
+// override with -PtokenpilotDir=...), Gradle builds it from source; otherwise it resolves from mavenLocal.
+def tokenpilotDir = file(providers.gradleProperty('tokenpilotDir').orElse('../tokenpilot').get())
+if (new File(tokenpilotDir, 'settings.gradle').isFile()) {
+    includeBuild(tokenpilotDir)
+}

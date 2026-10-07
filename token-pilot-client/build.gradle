@@ -1,0 +1,12 @@
+apply plugin: 'java-test-fixtures'
+
+description = 'Dependency-free Java client that sends LLM usage events to the Token Pilot Control Plane.'
+
+// The fake Control Plane is for this build's tests only; it is not part of the published artifact.
+components.java.withVariantsFromConfiguration(configurations.testFixturesApiElements) { skip() }
+components.java.withVariantsFromConfiguration(configurations.testFixturesRuntimeElements) { skip() }
+
+// Customer applications are not all on Java 25; the transport client stays on the Java 17 baseline.
+tasks.withType(JavaCompile).configureEach {
+    options.release = 17
+}

@@ -1,0 +1,59 @@
+def versions = [
+    toolchain  : 25,
+    tokenpilot : '0.0.1-SNAPSHOT',
+    springBoot : '4.1.0',
+    junit      : '6.0.3',
+    assertj    : '3.27.7'
+]
+
+allprojects {
+    group = 'cloud.token-pilot'
+    version = providers.gradleProperty('projectVersion').orElse('0.0.1-SNAPSHOT').get()
+
+    repositories {
+        mavenCentral()
+        mavenLocal {
+            content {
+                includeGroup 'cloud.token-pilot'
+            }
+        }
+    }
+}
+
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'maven-publish'
+
+    ext.versions = versions
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(versions.toolchain)
+        }
+        withSourcesJar()
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        options.compilerArgs += ['-Xlint:all', '-Werror']
+    }
+
+    dependencies {
+        testImplementation platform("org.junit:junit-bom:${versions.junit}")
+        testImplementation 'org.junit.jupiter:junit-jupiter'
+        testImplementation "org.assertj:assertj-core:${versions.assertj}"
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+
+    tasks.named('test') {
+        useJUnitPlatform()
+    }
+
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                from components.java
+            }
+        }
+    }
+}
