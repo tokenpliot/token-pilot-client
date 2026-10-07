@@ -47,7 +47,9 @@ public final class TokenPilotClient implements AutoCloseable {
 
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
-    private volatile long shutdownDeadlineNanos = Long.MAX_VALUE;
+    /** Set once close() has started; only then is {@link #shutdownDeadlineNanos} meaningful. */
+    private volatile boolean shuttingDown;
+    private volatile long shutdownDeadlineNanos;
 
     /** Recorded events not yet delivered or dropped, including the batch in flight. */
     private final AtomicLong pending = new AtomicLong();
@@ -94,8 +96,8 @@ public final class TokenPilotClient implements AutoCloseable {
         }
         pending.incrementAndGet();
         if (!queue.offer(event)) {
-            settle(1);
             drop(event, DropReason.QUEUE_FULL, "queue capacity " + config.queueCapacity() + " reached");
+            settle(1);
             return false;
         }
         recorded.increment();
@@ -107,7 +109,8 @@ public final class TokenPilotClient implements AutoCloseable {
 
     /**
      * Sends what is queued now and waits until every recorded event is delivered or dropped, or the timeout
-     * passes. Returns whether everything settled in time.
+     * passes. Returns whether everything settled in time; when it returns {@code true}, {@link #stats()} and the
+     * {@link DeliveryListener} have already seen every event recorded before the call.
      */
     public boolean flush(Duration timeout) throws InterruptedException {
         long deadline = System.nanoTime() + timeout.toNanos();
@@ -143,6 +146,7 @@ public final class TokenPilotClient implements AutoCloseable {
         }
         long timeout = config.shutdownTimeout().toNanos();
         shutdownDeadlineNanos = System.nanoTime() + timeout;
+        shuttingDown = true;
         executor.execute(this::drain);
         executor.shutdown();
         try {
@@ -310,6 +314,11 @@ public final class TokenPilotClient implements AutoCloseable {
         long base = config.initialBackoff().toNanos() << Math.min(attempt - 1, 20);
         long capped = Math.min(Math.max(base, 0), config.maxBackoff().toNanos());
         long delay = capped / 2 + ThreadLocalRandom.current().nextLong(capped / 2 + 1);
+        if (!shuttingDown) {
+            TimeUnit.NANOSECONDS.sleep(delay);
+            return true;
+        }
+        // nanoTime values may be negative, so compare differences, never against a sentinel.
         long remaining = shutdownDeadlineNanos - System.nanoTime();
         if (remaining <= 0) {
             return false;
@@ -318,24 +327,27 @@ public final class TokenPilotClient implements AutoCloseable {
         return shutdownDeadlineNanos - System.nanoTime() > 0;
     }
 
+    // Counters and listener callbacks happen before settle(): once flush() sees nothing pending, stats() and every
+    // DeliveryListener call already reflect each event.
+
     private void delivered(UsageEvent event, boolean duplicate) {
         (duplicate ? duplicates : created).increment();
-        settle(1);
         try {
             listener.onDelivered(event, duplicate);
         } catch (RuntimeException exception) {
             LOG.log(Level.WARNING, "DeliveryListener.onDelivered failed", exception);
         }
+        settle(1);
     }
 
     private void dropAll(List<UsageEvent> events, DropReason reason, String detail) {
         if (events.isEmpty()) {
             return;
         }
-        settle(events.size());
         for (UsageEvent event : events) {
             drop(event, reason, detail);
         }
+        settle(events.size());
     }
 
     private void drop(UsageEvent event, DropReason reason, String detail) {

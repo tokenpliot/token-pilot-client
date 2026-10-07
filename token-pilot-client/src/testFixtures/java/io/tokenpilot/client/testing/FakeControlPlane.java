@@ -29,6 +29,12 @@ import io.tokenpilot.client.internal.Json;
  */
 public final class FakeControlPlane implements AutoCloseable {
 
+    /**
+     * A Control Plane that is down: nothing listens on port 1. A port taken from {@code new ServerSocket(0)} and
+     * released would be an ephemeral port another process could bind before the test connects.
+     */
+    public static final URI UNREACHABLE = URI.create("http://127.0.0.1:1");
+
     public record Request(Map<String, String> headers, String body, Map<String, Object> json) {
 
         @SuppressWarnings("unchecked")

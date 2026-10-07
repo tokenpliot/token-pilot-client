@@ -3,7 +3,6 @@ package io.tokenpilot.client.tokenpilot;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
-import java.net.ServerSocket;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -142,11 +141,7 @@ class TokenPilotLedgerForwarderTest {
 
     @Test
     void ledgerRecordingIsUnaffectedWhenTheControlPlaneIsDown() throws Exception {
-        int closedPort;
-        try (ServerSocket socket = new ServerSocket(0)) {
-            closedPort = socket.getLocalPort();
-        }
-        client = TokenPilotClient.create(config("http://127.0.0.1:" + closedPort).maxAttempts(2).build());
+        client = TokenPilotClient.create(config(FakeControlPlane.UNREACHABLE.toString()).maxAttempts(2).build());
         LedgerManager ledger = LedgerComponents.defaultLedgerManager(
             LedgerComponents.inMemoryPricingRegistry(List.of()),
             LedgerComponents.defaultCostCalculator(),
@@ -159,7 +154,8 @@ class TokenPilotLedgerForwarderTest {
         assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofMillis(500));
 
         assertThat(client.flush(Duration.ofSeconds(10))).isTrue();
-        assertThat(client.stats().dropped()).containsEntry(DropReason.RETRIES_EXHAUSTED, 200L);
+        assertThat(client.stats().dropped()).as(client.stats().toString())
+            .containsEntry(DropReason.RETRIES_EXHAUSTED, 200L);
     }
 
     @Test

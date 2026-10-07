@@ -7,7 +7,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -156,12 +155,7 @@ class TokenPilotClientTest {
     @Test
     void anUnreachableControlPlaneExhaustsTheBoundedRetries() throws Exception {
         server = FakeControlPlane.start(FakeControlPlane.deduplicating());
-        int closedPort;
-        try (ServerSocket socket = new ServerSocket(0)) {
-            closedPort = socket.getLocalPort();
-        }
-        client = TokenPilotClient.create(config().endpoint("http://127.0.0.1:" + closedPort)
-            .maxAttempts(3).build());
+        client = TokenPilotClient.create(config().endpoint(FakeControlPlane.UNREACHABLE).maxAttempts(3).build());
 
         client.record(event("evt-1"));
         assertThat(client.flush(Duration.ofSeconds(5))).isTrue();
