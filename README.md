@@ -103,3 +103,7 @@ TP_ENDPOINT=http://localhost:8080 TP_API_KEY=... TP_PROJECT_KEY=... TP_ENVIRONME
 ```
 
 JDK 25 toolchain이 필요합니다. `token-pilot-client`는 `--release 17`로 컴파일됩니다.
+
+## 라이선스
+
+[MIT](LICENSE)
