@@ -1,4 +1,4 @@
-description = 'Forwards Token Pilot core ledger events to the Control Plane, with optional Spring Boot auto-configuration.'
+description = 'Forwards Token Pilot core ledger events to the Control Plane and enforces its decisions on Spring AI calls, with optional Spring Boot auto-configuration.'
 
 // token-pilot-core is compiled for Java 25, so this adapter follows its baseline.
 tasks.withType(JavaCompile).configureEach {
