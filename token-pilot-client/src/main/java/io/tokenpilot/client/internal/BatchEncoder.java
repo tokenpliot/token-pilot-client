@@ -3,7 +3,6 @@ package io.tokenpilot.client.internal;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Map;
 
 import io.tokenpilot.client.UsageEvent;
 
@@ -57,20 +56,7 @@ public final class BatchEncoder {
         field(out, "pricingPlanId", event.pricingPlanId(), false);
         field(out, "pricingVersion", event.pricingVersion(), false);
         field(out, "sourceType", event.sourceType(), false);
-        if (!event.metadata().isEmpty()) {
-            out.append(",\"metadata\":{");
-            boolean first = true;
-            for (Map.Entry<String, String> entry : event.metadata().entrySet()) {
-                if (!first) {
-                    out.append(',');
-                }
-                first = false;
-                Json.writeString(out, entry.getKey());
-                out.append(':');
-                Json.writeString(out, entry.getValue());
-            }
-            out.append('}');
-        }
+        Json.writeMetadata(out, event.metadata());
         field(out, "occurredAt", event.occurredAt().toString(), false);
         out.append('}');
     }

@@ -70,7 +70,7 @@ class ObserveV2DeliveryTest {
     }
 
     @Test
-    void sendsEachEventInTheObserveContractShapeWithoutClientCostsOrMetadata() throws Exception {
+    void sendsEachEventInTheObserveContractShapeWithMetadataButWithoutClientCosts() throws Exception {
         server = FakeControlPlane.start(FakeControlPlane.observeDeduplicating());
         client = client();
 
@@ -84,7 +84,7 @@ class ObserveV2DeliveryTest {
         assertThat(first.header("X-API-Key")).isEqualTo("tpk_live_test_secret");
         assertThat(first.json()).containsOnlyKeys("projectKey", "environment", "eventId", "requestId",
                 "schemaVersion", "tokenSemantics", "provider", "model", "callStatus", "promptTokens",
-                "completionTokens", "cachedPromptTokens", "reasoningTokens", "occurredAt")
+                "completionTokens", "cachedPromptTokens", "reasoningTokens", "metadata", "occurredAt")
             .containsEntry("projectKey", "support-copilot")
             .containsEntry("environment", "prod")
             .containsEntry("eventId", "evt-1")
@@ -92,7 +92,8 @@ class ObserveV2DeliveryTest {
             .containsEntry("schemaVersion", "observe-v1")
             .containsEntry("tokenSemantics", "INCLUSIVE_V1")
             .containsEntry("callStatus", "SUCCEEDED")
-            .containsEntry("occurredAt", "2026-10-07T01:02:03.123456Z");
+            .containsEntry("occurredAt", "2026-10-07T01:02:03.123456Z")
+            .containsEntry("metadata", java.util.Map.of("trace_id", "trace-1"));
         assertThat(first.json().get("promptTokens").toString()).isEqualTo("1200");
         assertThat(first.json().get("cachedPromptTokens").toString()).isEqualTo("200");
         assertThat(client.stats().created()).isEqualTo(2);

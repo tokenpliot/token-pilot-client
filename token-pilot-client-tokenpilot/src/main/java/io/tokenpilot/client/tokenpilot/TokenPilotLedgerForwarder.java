@@ -14,6 +14,7 @@ import io.tokenpilot.client.TokenPilotClient;
 import io.tokenpilot.client.UsageEvent;
 import io.tokenpilot.core.LedgerListener;
 import io.tokenpilot.core.domain.CostRecordedEvent;
+import io.tokenpilot.core.domain.PricingReconciliationResult;
 import io.tokenpilot.core.domain.TokenUsage;
 import io.tokenpilot.core.domain.TokenUsageDetails;
 
@@ -34,6 +35,9 @@ import io.tokenpilot.core.domain.TokenUsageDetails;
  *       the request id and explicitly configured tags become metadata.</li>
  *   <li>Each ledger record gets its own {@code eventId}/{@code requestId}; the application's request id goes to
  *       {@code app_request_id} metadata because one request can produce several ledger records.</li>
+ *   <li>Calls Token Pilot does not put in its ledger (no price for the model, or the response model differs
+ *       from the priced one) reach {@link #forwardUnreconciled} instead, without a cost and with
+ *       {@code pricing_reconciliation} metadata, so the Control Plane still sees their tokens.</li>
  * </ul>
  */
 public final class TokenPilotLedgerForwarder implements LedgerListener {
@@ -75,12 +79,23 @@ public final class TokenPilotLedgerForwarder implements LedgerListener {
 
     @Override
     public void onRecord(CostRecordedEvent event) {
+        forward(event, null);
+    }
+
+    /**
+     * Forwards a call Token Pilot answered but did not record, with its tokens and without a cost. The Observe v2
+     * endpoint prices it on the server or records it as unpriced; the batch endpoint stores no cost for it.
+     */
+    public void forwardUnreconciled(CostRecordedEvent event, PricingReconciliationResult result) {
+        forward(event, Objects.requireNonNull(result, "result must not be null"));
+    }
+
+    private void forward(CostRecordedEvent event, PricingReconciliationResult unreconciled) {
         try {
-            client.record(toUsageEvent(event));
+            client.record(toUsageEvent(event, unreconciled));
         } catch (RuntimeException exception) {
             invalidEvents.increment();
-            LOG.log(Level.WARNING, "Token Pilot ledger record not sent to the Control Plane: {0}",
-                exception.getMessage());
+            LOG.log(Level.WARNING, "Token Pilot usage not sent to the Control Plane: {0}", exception.getMessage());
         }
     }
 
@@ -90,6 +105,10 @@ public final class TokenPilotLedgerForwarder implements LedgerListener {
     }
 
     UsageEvent toUsageEvent(CostRecordedEvent event) {
+        return toUsageEvent(event, null);
+    }
+
+    private UsageEvent toUsageEvent(CostRecordedEvent event, PricingReconciliationResult unreconciled) {
         TokenUsage usage = event.usage();
         TokenUsageDetails details = usage.details();
         Map<String, String> tags = event.tags() == null ? Map.of() : event.tags();
@@ -114,6 +133,9 @@ public final class TokenPilotLedgerForwarder implements LedgerListener {
             } else {
                 metadata.put("cost_currency", event.cost().currency().getCurrencyCode());
             }
+        }
+        if (unreconciled != null) {
+            metadata.put("pricing_reconciliation", unreconciled.name().toLowerCase(Locale.ROOT));
         }
         putIfFits(metadata, "app_request_id", tags.get(REQUEST_ID_TAG));
         forwardedTags.forEach((tag, key) -> putIfFits(metadata, key, tags.get(tag)));

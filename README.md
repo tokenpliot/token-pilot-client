@@ -29,7 +29,7 @@
 | 저장 위치 | 기존 사용량 테이블(기존 대시보드·예산 집계) | Observe 원장(`/api/observe/ledger/*` 조회, 미정산·가격 미상 집계) |
 | 비용 | 클라이언트가 계산한 USD를 보냄 | 보내지 않음. 서버가 자기 가격표로 계산하고, 계산할 수 없으면 0이 아니라 가격 미상(`UNPRICED`)으로 남김 |
 | 요청 단위 | 최대 100건 배치 | 한 건씩, 같은 스레드에서 순서대로. 네트워크·5xx 실패가 나면 그 회차를 멈추고 남은 이벤트만 다시 보냄 |
-| 보내지 않는 값 | 없음 | `totalTokens`, 비용, `pricingVersion`, `sourceType`, metadata(`trace_id` 포함). 서버 v2 계약에 해당 필드가 없음 |
+| 보내지 않는 값 | 없음 | `totalTokens`, 비용, `pricingVersion`, `sourceType`. 서버 v2 계약에 해당 필드가 없음. metadata(`trace_id` 포함)는 보내며, v2 metadata를 지원하기 전 서버는 이를 무시함 |
 | 서버 설정 | 없음 | `token-pilot.observe.ingestion.enabled=true`가 필요. 꺼져 있으면 404로 거부되어 `REQUEST_REFUSED`로 버려짐 |
 
 `OBSERVE_V2`의 토큰은 포함 관계(`INCLUSIVE_V1`)로 해석됩니다. `promptTokens`에는 캐시 토큰이, `completionTokens`에는 추론 토큰이 들어 있어야 하며, provider 응답과 Token Pilot 원장은 이미 이 형태입니다. 캐시·추론 토큰을 모르면 0이 아니라 비워서(null) 보내고, 서버는 요율이 다르면 그 이벤트를 가격 미상으로 기록합니다.
@@ -102,9 +102,9 @@ token-pilot:
 ## 알려진 한계
 
 - `token-pilot-core`는 아직 배포되지 않았습니다. 빌드할 때는 `../tokenpilot` 체크아웃을 소스로 포함하거나(`-PtokenpilotDir=...`로 위치 변경) `mavenLocal`에서 가져옵니다.
-- Token Pilot의 Spring AI advisor는 가격표가 없는 모델이나 요청·응답 모델이 다른 호출을 원장에 기록하지 않습니다(`RECONCILED`일 때만 `LedgerListener` 호출). 그런 호출은 이 SDK로 전달되지 않으므로 Control Plane에도 남지 않습니다. 바꾸려면 `tokenpilot` 쪽 변경이 필요합니다.
-- `INGESTION_BATCH` 계약(`schemaVersion 2026-10-01`)에는 가격 미상을 표현하는 방법이 없습니다. 가격 미상을 구분해야 하면 `OBSERVE_V2`를 씁니다.
-- Token Pilot 예산 기능(`token-pilot.budget.enabled=true`)을 켜면 advisor가 `LedgerListener` 대신 예약 정산 경로를 써서 이 SDK의 원장 전달이 동작하지 않습니다.
+- Token Pilot의 Spring AI advisor는 가격표가 없는 모델(`UNPRICED`)이나 요청·응답 모델이 다른 호출(`RECONCILIATION_REQUIRED`)을 원장에 기록하지 않습니다. 이 SDK는 `ChatClient`에 `UnreconciledUsageAdvisor`를 붙여 그런 호출도 토큰과 함께 비용 없이 보냅니다(metadata `pricing_reconciliation`). 원장에 기록된 호출은 `LedgerListener`로만 보내므로 두 번 가지 않습니다.
+- `INGESTION_BATCH` 계약(`schemaVersion 2026-10-01`)에는 가격 미상을 표현하는 방법이 없어서, 위 호출이 배치 경로로 가면 서버에 비용 0으로 저장됩니다. 가격 미상을 구분해야 하면 `OBSERVE_V2`를 씁니다.
+- Token Pilot 예산 기능(`token-pilot.budget.enabled=true`)과 이 SDK의 사용량 전달은 함께 쓰지 않습니다. 예산 기능을 켜면 advisor가 `LedgerListener` 대신 예약 정산 경로를 써서 전달이 멈춥니다. 예산 집행이 필요하면 Token Pilot 로컬 예산 대신 Control Plane 판정·집행(Enforce)을 씁니다.
 - `INGESTION_BATCH`와 v2 모두 `Retry-After`를 주지 않아 재시도 간격은 클라이언트 설정으로 정합니다.
 - 큐는 프로세스 메모리에만 있습니다. 프로세스가 비정상 종료되면 아직 보내지 못한 이벤트는 사라집니다(디스크 버퍼는 범위 밖).
 - 재시도를 모두 실패하면 배치마다 WARNING 로그를 남깁니다. Control Plane이 오래 내려가 있으면 로그가 많아질 수 있습니다.

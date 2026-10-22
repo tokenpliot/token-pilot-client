@@ -12,8 +12,9 @@ public enum IngestionApi {
     /**
      * {@code POST /api/v2/observe/events}: the Observe ledger. One event per request; the server prices the tokens
      * from its own catalog and records an event it cannot price as unpriced rather than 0 USD. Costs, total
-     * tokens, pricing version and metadata (including {@code trace_id}) are not sent because the endpoint does
-     * not accept them. Prompt and completion counts must include cached and reasoning tokens. The server must
+     * tokens and pricing version are not sent because the endpoint does not take them; metadata (including
+     * {@code trace_id}) is sent, and servers from before v2 accepted it ignore it. Prompt and completion counts
+     * must include cached and reasoning tokens. The server must
      * enable the endpoint ({@code token-pilot.observe.ingestion.enabled=true}); otherwise every event is refused
      * with 404.
      */

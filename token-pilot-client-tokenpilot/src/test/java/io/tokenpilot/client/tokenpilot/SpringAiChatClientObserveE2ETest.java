@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -74,9 +75,13 @@ class SpringAiChatClientObserveE2ETest {
     }
 
     private static String ask(ChatClient chatClient) {
+        return ask(chatClient, MODEL);
+    }
+
+    private static String ask(ChatClient chatClient, String model) {
         return chatClient.prompt()
             .user(PROMPT_TEXT)
-            .options(ChatOptions.builder().model(MODEL).maxTokens(100))
+            .options(ChatOptions.builder().model(model).maxTokens(100))
             .advisors(advisor -> advisor.param("tokenpilot.request.id", "app-req-1").param("tenant_id", "tenant-a"))
             .call()
             .content();
@@ -96,7 +101,7 @@ class SpringAiChatClientObserveE2ETest {
             FakeControlPlane.Request request = server.requests().get(0);
             assertThat(request.path()).isEqualTo("/api/ingestion/events/batch");
             assertThat(request.body()).doesNotContain(PROMPT_TEXT).doesNotContain("fake answer");
-
+            assertThat(request.items()).as("the advisor must not resend a call the ledger recorded").hasSize(1);
             Map<String, Object> item = request.items().get(0);
             assertThat(item).containsEntry("provider", "openai").containsEntry("model", MODEL)
                 .containsEntry("sourceType", TokenPilotLedgerForwarder.SOURCE_TYPE);
@@ -112,6 +117,51 @@ class SpringAiChatClientObserveE2ETest {
             assertThat(client.stats().created()).isEqualTo(1);
         });
     }
+
+    @Test
+    void aCallForAModelWithoutAPriceIsStillSentWithItsTokensAndNoCost() throws Exception {
+        server = FakeControlPlane.start(FakeControlPlane.deduplicating());
+
+        app().run(context -> {
+            ask(context.getBean(ChatClient.Builder.class).build(), "gpt-not-in-catalog");
+            TokenPilotClient client = context.getBean(TokenPilotClient.class);
+            assertThat(client.flush(Duration.ofSeconds(5))).isTrue();
+
+            assertThat(context.getBean(LedgerProbe.class).records).as("Token Pilot left it out of its ledger").isEmpty();
+            assertThat(server.requests()).singleElement().satisfies(request -> {
+                assertThat(request.body()).doesNotContain(PROMPT_TEXT);
+                assertThat(request.items()).singleElement().satisfies(item -> {
+                    assertThat(item).containsEntry("model", "gpt-not-in-catalog").doesNotContainKey("totalCostUsd");
+                    assertThat(item.get("promptTokens").toString()).isEqualTo("1000");
+                    assertThat(item.get("completionTokens").toString()).isEqualTo("2000");
+                    assertThat(item.get("metadata")).isEqualTo(Map.of("usage_source", "provider_reported",
+                        "pricing_reconciliation", "unpriced", "app_request_id", "app-req-1", "tenant_id", "tenant-a"));
+                });
+            });
+        });
+    }
+
+    @Test
+    void aCallAnsweredByADifferentModelIsSentUnderTheModelThatRan() throws Exception {
+        server = FakeControlPlane.start(FakeControlPlane.deduplicating());
+
+        app().run(context -> {
+            context.getBean(FakeModel.class).respondAs.set("gpt-4o-2024-11-20");
+            ask(context.getBean(ChatClient.Builder.class).build());
+            TokenPilotClient client = context.getBean(TokenPilotClient.class);
+            assertThat(client.flush(Duration.ofSeconds(5))).isTrue();
+
+            assertThat(context.getBean(LedgerProbe.class).records).isEmpty();
+            assertThat(server.requests()).singleElement().satisfies(request -> assertThat(request.items())
+                .singleElement().satisfies(item -> {
+                    assertThat(item).containsEntry("model", "gpt-4o-2024-11-20").doesNotContainKey("totalCostUsd");
+                    @SuppressWarnings("unchecked")
+                    Map<String, String> metadata = (Map<String, String>) item.get("metadata");
+                    assertThat(metadata).containsEntry("pricing_reconciliation", "reconciliation_required");
+                }));
+        });
+    }
+
 
     @Test
     void withObserveV2TheSameCallReachesTheObserveLedgerEndpoint() throws Exception {
@@ -152,19 +202,8 @@ class SpringAiChatClientObserveE2ETest {
     static class CustomerApp {
 
         @Bean
-        ChatModel fakeChatModel() {
-            return new ChatModel() {
-                @Override
-                public ChatResponse call(Prompt prompt) {
-                    return new ChatResponse(List.of(new Generation(new AssistantMessage("fake answer"))),
-                        ChatResponseMetadata.builder().model(MODEL).usage(new DefaultUsage(1_000, 2_000)).build());
-                }
-
-                @Override
-                public ChatOptions getOptions() {
-                    return ToolCallingChatOptions.builder().build();
-                }
-            };
+        FakeModel fakeChatModel() {
+            return new FakeModel();
         }
 
         /** What Spring AI's own ChatClient auto-configuration does: apply every customizer. */
@@ -179,6 +218,24 @@ class SpringAiChatClientObserveE2ETest {
         @Bean
         LedgerProbe ledgerProbe() {
             return new LedgerProbe();
+        }
+    }
+
+    /** Answers as the requested model unless told to report another one. */
+    static final class FakeModel implements ChatModel {
+
+        final AtomicReference<String> respondAs = new AtomicReference<>();
+
+        @Override
+        public ChatResponse call(Prompt prompt) {
+            String model = respondAs.get() != null ? respondAs.get() : prompt.getOptions().getModel();
+            return new ChatResponse(List.of(new Generation(new AssistantMessage("fake answer"))),
+                ChatResponseMetadata.builder().model(model).usage(new DefaultUsage(1_000, 2_000)).build());
+        }
+
+        @Override
+        public ChatOptions getOptions() {
+            return ToolCallingChatOptions.builder().build();
         }
     }
 

@@ -12,7 +12,8 @@ import io.tokenpilot.client.UsageEvent;
 
 /**
  * {@code POST /api/v2/observe/events}: the Observe ledger endpoint. It takes one event per request and prices it
- * on the server, so costs, totals, pricing version and metadata are not sent.
+ * on the server, so costs, totals and pricing version are not sent. Metadata is sent under the same rules as the
+ * batch endpoint; servers from before v2 accepted metadata ignore it.
  *
  * <p>Events are sent one after another on the caller's (sender) thread. The first network or server failure stops
  * the round: when the Control Plane is down, a batch costs one timeout rather than one per event.
@@ -101,6 +102,7 @@ public final class ObserveV2Sender implements Transport {
         number(out, "completionTokens", event.completionTokens());
         number(out, "cachedPromptTokens", event.cachedPromptTokens());
         number(out, "reasoningTokens", event.reasoningTokens());
+        Json.writeMetadata(out, event.metadata());
         string(out, "occurredAt", event.occurredAt().toString(), false);
         out.append('}');
         return out.toString().getBytes(StandardCharsets.UTF_8);
