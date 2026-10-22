@@ -23,9 +23,9 @@ import com.sun.net.httpserver.HttpServer;
 import io.tokenpilot.client.internal.Json;
 
 /**
- * In-process stand-in for {@code POST /api/ingestion/events/batch}. Each request is answered by a
- * {@link Responder}; {@link #deduplicating()} behaves like the real server's idempotency (same eventId and
- * payload: DUPLICATE, changed payload: REJECTED INGESTION-409).
+ * In-process stand-in for {@code POST /api/ingestion/events/batch} and {@code POST /api/v2/observe/events}. Each
+ * request is answered by a {@link Responder}; {@link #deduplicating()} and {@link #observeDeduplicating()} behave
+ * like the real server's idempotency (same eventId and payload: duplicate, changed payload: 409).
  */
 public final class FakeControlPlane implements AutoCloseable {
 
@@ -35,7 +35,7 @@ public final class FakeControlPlane implements AutoCloseable {
      */
     public static final URI UNREACHABLE = URI.create("http://127.0.0.1:1");
 
-    public record Request(Map<String, String> headers, String body, Map<String, Object> json) {
+    public record Request(String path, Map<String, String> headers, String body, Map<String, Object> json) {
 
         @SuppressWarnings("unchecked")
         public List<Map<String, Object>> items() {
@@ -107,7 +107,7 @@ public final class FakeControlPlane implements AutoCloseable {
                 headers.put(name.toLowerCase(java.util.Locale.ROOT), values.get(0)));
             @SuppressWarnings("unchecked")
             Map<String, Object> json = (Map<String, Object>) Json.parse(body);
-            Request request = new Request(Map.copyOf(headers), body, json);
+            Request request = new Request(exchange.getRequestURI().getPath(), Map.copyOf(headers), body, json);
             requests.add(request);
 
             Reply reply;
@@ -165,5 +165,27 @@ public final class FakeControlPlane implements AutoCloseable {
             }
         }
         return batchReply(results);
+    }
+
+    /** Observe v2: 201 for a new eventId, 200 for a byte-identical replay, 409 when the body changed. */
+    public static Responder observeDeduplicating() {
+        Map<String, Map<String, Object>> stored = new ConcurrentHashMap<>();
+        return (request, number) -> {
+            Map<String, Object> event = request.json();
+            Map<String, Object> previous = stored.putIfAbsent((String) event.get("eventId"), event);
+            if (previous == null) {
+                return observeReply(201, event, false);
+            }
+            if (previous.equals(event)) {
+                return observeReply(200, event, true);
+            }
+            return error(409, "INGESTION-409");
+        };
+    }
+
+    public static Reply observeReply(int status, Map<String, Object> event, boolean duplicate) {
+        return new Reply(status, "{\"success\":true,\"code\":\"SUCCESS\",\"data\":{\"eventId\":\""
+            + event.get("eventId") + "\",\"usageEventId\":\"use-" + event.get("eventId") + "\",\"duplicate\":"
+            + duplicate + "}}");
     }
 }

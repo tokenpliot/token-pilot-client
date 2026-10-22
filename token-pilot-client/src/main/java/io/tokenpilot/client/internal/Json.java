@@ -18,6 +18,25 @@ public final class Json {
 
     // --- writing ---
 
+    /** Appends {@code ,"metadata":{...}} for a non-empty map; nothing for an empty one. */
+    public static void writeMetadata(StringBuilder out, Map<String, String> metadata) {
+        if (metadata.isEmpty()) {
+            return;
+        }
+        out.append(",\"metadata\":{");
+        boolean first = true;
+        for (Map.Entry<String, String> entry : metadata.entrySet()) {
+            if (!first) {
+                out.append(',');
+            }
+            first = false;
+            writeString(out, entry.getKey());
+            out.append(':');
+            writeString(out, entry.getValue());
+        }
+        out.append('}');
+    }
+
     public static void writeString(StringBuilder out, String value) {
         out.append('"');
         for (int i = 0; i < value.length(); i++) {
