@@ -14,6 +14,8 @@ import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -35,15 +37,20 @@ import io.tokenpilot.core.domain.TokenUsage;
 import io.tokenpilot.core.domain.TokenUsageDetails;
 import io.tokenpilot.core.domain.UsageSource;
 import io.tokenpilot.springai.UsageExtractor;
+import reactor.core.publisher.Flux;
 
 /**
  * Asks the Control Plane before every {@code ChatClient} call and applies the customer's enforcement settings
  * through a {@link ControlPlaneEnforcer}.
  *
- * <p>Runs just outside Token Pilot's {@code LedgerAdvisor} ({@link #ORDER}), so a blocked call reaches neither
- * Token Pilot nor the model. A blocked call throws {@link EnforcementException}; every other call returns the
- * model's response with the decision in the response context ({@link #OUTCOME_CONTEXT_KEY} and friends), so the
- * application can show an advisory without changing its call code.
+ * <p>Runs outside Token Pilot's {@code LedgerAdvisor} and this SDK's {@code UnreconciledUsageAdvisor}
+ * ({@link #ORDER}), so a blocked call reaches neither Token Pilot nor the model. A blocked call throws
+ * {@link EnforcementException}; every other call returns the model's response with the decision in the response
+ * context ({@link #OUTCOME_CONTEXT_KEY} and friends), so the application can show an advisory without changing
+ * its call code.
+ *
+ * <p>Streaming calls cannot be settled, so in an ENFORCE scope they fail with {@link EnforcementException}
+ * ({@link ControlPlaneEnforcer#checkStreaming}); in OBSERVE and ADVISORY scopes they pass without a decision.
  *
  * <p>Only counts leave the process: the prompt text is used locally to estimate input tokens and is never sent.
  * Actual usage comes from Token Pilot's {@link UsageExtractor}; the cost from Token Pilot's own pricing catalog.
@@ -54,10 +61,10 @@ import io.tokenpilot.springai.UsageExtractor;
  * the same command so the Control Plane answers with the same decision and reservation) and
  * {@link #ENDPOINT_PARAM} (selects per-endpoint enforcement settings).
  */
-public final class ControlPlaneEnforcementAdvisor implements CallAdvisor {
+public final class ControlPlaneEnforcementAdvisor implements CallAdvisor, StreamAdvisor {
 
-    /** Token Pilot's {@code LedgerAdvisor} runs at {@code LOWEST_PRECEDENCE - 1}; this runs right outside it. */
-    public static final int ORDER = Ordered.LOWEST_PRECEDENCE - 2;
+    /** Outermost of the Token Pilot advisors: {@code LedgerAdvisor} is {@code LOWEST_PRECEDENCE - 1}. */
+    public static final int ORDER = Ordered.LOWEST_PRECEDENCE - 3;
 
     public static final String REQUEST_ID_PARAM = TokenPilotLedgerForwarder.REQUEST_ID_TAG;
     public static final String ENDPOINT_PARAM = "tokenpilot.enforcement.endpoint";
@@ -110,6 +117,14 @@ public final class ControlPlaneEnforcementAdvisor implements CallAdvisor {
     @Override
     public int getOrder() {
         return ORDER;
+    }
+
+    @Override
+    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+        return Flux.defer(() -> {
+            enforcer.checkStreaming(callRequest(request));
+            return chain.nextStream(request);
+        });
     }
 
     @Override

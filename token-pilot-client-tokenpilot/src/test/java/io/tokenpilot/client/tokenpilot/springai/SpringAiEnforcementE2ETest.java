@@ -42,6 +42,7 @@ import io.tokenpilot.client.tokenpilot.autoconfigure.TokenPilotClientAutoConfigu
 import io.tokenpilot.client.tokenpilot.autoconfigure.TokenPilotEnforcementAutoConfiguration;
 import io.tokenpilot.core.LedgerListener;
 import io.tokenpilot.core.domain.CostRecordedEvent;
+import reactor.core.publisher.Flux;
 
 /**
  * A customer Spring Boot app with Token Pilot, this SDK and a fake provider: the Control Plane decision is applied
@@ -258,6 +259,32 @@ class SpringAiEnforcementE2ETest {
         });
     }
 
+    @Test
+    void streamingIsRefusedInAnEnforceScopeAndPassesElsewhere() throws Exception {
+        server = FakeControlPlane.start(controlPlane(decision("req-9", "ALLOW", "OBSERVE", false)));
+
+        app(server.uri().toString(), "token-pilot.client.enforcement.endpoints.checkout.mode=enforce")
+            .run(context -> {
+                ChatClient chatClient = context.getBean(ChatClient.Builder.class).build();
+
+                List<String> observed = chatClient.prompt().user(PROMPT_TEXT)
+                    .options(ChatOptions.builder().model(MODEL))
+                    .stream().content().collectList().block();
+                assertThat(observed).containsExactly("fake answer");
+
+                assertThatThrownBy(() -> chatClient.prompt().user(PROMPT_TEXT)
+                    .options(ChatOptions.builder().model(MODEL))
+                    .advisors(advisor -> advisor.param(ControlPlaneEnforcementAdvisor.ENDPOINT_PARAM, "checkout"))
+                    .stream().content().collectList().block())
+                    .isInstanceOfSatisfying(EnforcementException.class, refused -> assertThat(
+                        refused.decision().outcome()).isEqualTo(DecisionOutcome.INDETERMINATE));
+
+                assertThat(context.getBean(Provider.class).calls).as("only the OBSERVE stream reached the model")
+                    .hasValue(1);
+                assertThat(server.requests()).as("streams never ask for a decision").isEmpty();
+            });
+    }
+
     static final class Provider implements ChatModel {
 
         final AtomicInteger calls = new AtomicInteger();
@@ -271,6 +298,11 @@ class SpringAiEnforcementE2ETest {
             }
             return new ChatResponse(List.of(new Generation(new AssistantMessage("fake answer"))),
                 ChatResponseMetadata.builder().model(MODEL).usage(new DefaultUsage(1_000, 2_000)).build());
+        }
+
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            return Flux.defer(() -> Flux.just(call(prompt)));
         }
 
         @Override

@@ -600,4 +600,22 @@ class ControlPlaneEnforcerTest {
         assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)).isLessThan(2000);
         assertThat(settlementResults).containsExactly("failed rsv-stuck COMMIT closed before settlement");
     }
+
+    @Test
+    void streamingIsRefusedOnlyInAnEnforceScopeAndNeverAsAPolicyDenial() {
+        start(EnforcementPolicy.builder()
+            .defaults(EnforcementSettings.defaults())
+            .endpoint("checkout", EnforcementSettings.enforce())
+            .build());
+
+        enforcer.checkStreaming(request("req-stream-observe"));
+        assertThatThrownBy(() -> enforcer.checkStreaming(CallRequest.builder().requestId("req-stream-enforce")
+                .endpoint("checkout").provider("openai").model("gpt-4o").build()))
+            .isInstanceOfSatisfying(EnforcementException.class, refused -> {
+                assertThat(refused.action()).isEqualTo(EnforcementAction.BLOCK);
+                assertThat(refused.decision().outcome()).isEqualTo(DecisionOutcome.INDETERMINATE);
+                assertThat(refused.decision().errorCode()).isEqualTo(ControlPlaneEnforcer.STREAMING_NOT_ENFORCEABLE);
+            });
+        assertThat(server.decisionRequests()).isEmpty();
+    }
 }

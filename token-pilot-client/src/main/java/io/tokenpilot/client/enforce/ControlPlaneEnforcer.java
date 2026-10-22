@@ -33,6 +33,8 @@ public final class ControlPlaneEnforcer implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(ControlPlaneEnforcer.class.getName());
 
     private static final String CLOSED_BEFORE_SETTLEMENT = "closed before settlement";
+    /** Error code of the client-side INDETERMINATE decision that refuses streaming in an ENFORCE scope. */
+    public static final String STREAMING_NOT_ENFORCEABLE = "STREAMING_NOT_ENFORCEABLE";
 
     private final EnforcerConfig config;
     private final ControlPlaneApi api;
@@ -124,6 +126,30 @@ public final class ControlPlaneEnforcer implements AutoCloseable {
             }
         }
         return new EnforcedResult<>(response, decision, action);
+    }
+
+    /**
+     * Gate for streaming calls, which this client cannot settle (a stream can end anywhere, with or without
+     * usage). In an ENFORCE scope the call is refused with {@link EnforcementException}: an opted-in customer
+     * must never be left unprotected without noticing. The refusal is an {@code INDETERMINATE} decision with
+     * error code {@link #STREAMING_NOT_ENFORCEABLE}, never a policy denial, and no request is sent. OBSERVE and
+     * ADVISORY scopes pass without a decision, since neither would stop the call.
+     *
+     * @throws EnforcementException  in an ENFORCE scope
+     * @throws IllegalStateException after {@link #close()}
+     */
+    public void checkStreaming(CallRequest request) {
+        Objects.requireNonNull(request, "request must not be null");
+        if (closed.get()) {
+            throw new IllegalStateException("enforcer is closed");
+        }
+        if (config.policy().settingsFor(request.endpoint()).mode() != EnforcementMode.ENFORCE) {
+            return;
+        }
+        Decision decision = Decision.failure(request.requestId(), DecisionOutcome.INDETERMINATE, 0,
+            STREAMING_NOT_ENFORCEABLE, null);
+        notifyDecision(request, decision, EnforcementAction.BLOCK);
+        throw new EnforcementException(decision, EnforcementAction.BLOCK);
     }
 
     /**

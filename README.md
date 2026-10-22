@@ -144,7 +144,9 @@ try {
 }
 ```
 
-advisor는 Token Pilot `LedgerAdvisor` 바로 바깥(`LOWEST_PRECEDENCE - 2`)에서 돌기 때문에, 차단된 호출은 Token Pilot 원장과 모델 어느 쪽에도 닿지 않습니다. 실제 사용량은 Token Pilot의 `UsageExtractor`로 읽고, 비용은 Token Pilot 가격표(`token-pilot.pricing.plans`)로 계산합니다. 응답 모델의 USD 가격이 없으면 비용을 추정하지 않고 `RECONCILIATION_REQUIRED`로 정산합니다.
+advisor는 Token Pilot advisor들 중 가장 바깥(`LOWEST_PRECEDENCE - 3`)에서 돌기 때문에, 차단된 호출은 Token Pilot 원장과 모델 어느 쪽에도 닿지 않습니다. 실제 사용량은 Token Pilot의 `UsageExtractor`로 읽고, 비용은 Token Pilot 가격표(`token-pilot.pricing.plans`)로 계산합니다. 응답 모델의 USD 가격이 없으면 비용을 추정하지 않고 `RECONCILIATION_REQUIRED`로 정산합니다.
+
+**스트리밍**: `stream()` 호출은 정산할 수 없어서, `ENFORCE` 범위에서는 provider를 부르기 전에 `EnforcementException`(판정 `INDETERMINATE`, `errorCode = STREAMING_NOT_ENFORCEABLE`)으로 실패합니다. `OBSERVE`·`ADVISORY` 범위의 스트림은 판정 없이 그대로 진행됩니다.
 
 ### 평범한 Java
 
@@ -180,11 +182,11 @@ EnforcedResult<MyResponse> result = enforcer.execute(
 
 ## 알려진 한계
 
-아래 한계 중 정책 결정이 필요한 것(스트리밍 집행, v2 metadata, 가격표 없는 모델, 기본 전송 경로, 승인 대기)은 [`docs/open-decisions.md`](docs/open-decisions.md)에 선택지와 권장안을 정리했습니다.
+이 SDK의 설계 결정(스트리밍 집행, v2 metadata, 원장에 안 남는 호출, 기본 전송 경로, 승인 대기)과 그 이유는 [`docs/decisions.md`](docs/decisions.md)에 있습니다.
 
 - 판정·정산 API(`/api/control/v1/decisions`, `/reservations/{id}/settlements`)는 서버에 아직 구현되지 않았습니다(#15, #17). 이 SDK는 [`control-plane-v1.yaml`](https://github.com/tokenpliot/token-pilot-cloud-api/blob/main/docs/api/control-plane-v1.yaml) 계약을 기준으로 만들었고, 서버가 나오기 전에 `enforcement.enabled=true`로 켜면 판정 요청이 404(`INDETERMINATE`)를 받습니다. `on-indeterminate: fail-closed`가 아니면 호출은 막히지 않습니다.
-- 집행 advisor는 동기 `ChatClient.call()`만 다룹니다. 스트리밍(`stream()`)에는 붙지 않습니다.
-- `REQUIRE_APPROVAL` 집행은 `approvalId`와 함께 호출을 막는 데까지입니다. 승인 상태 조회(`GET /approvals/{id}`)와 승인 후 재실행은 앱이 같은 `requestId`로 다시 호출해 처리합니다.
+- `ENFORCE` 범위의 스트리밍 호출은 집행 대신 거부됩니다(위 [스트리밍](#spring-boot--spring-ai)). 스트리밍을 집행해야 하면 별도 작업이 필요합니다.
+- `REQUIRE_APPROVAL` 집행은 `approvalId`와 함께 호출을 막는 데까지입니다. 승인 상태 조회(`GET /approvals/{id}`)와 승인 후 재실행은 파일럿 범위 밖이며, 앱이 같은 `requestId`로 다시 호출해 처리합니다.
 - `token-pilot-core`는 아직 배포되지 않았습니다. 빌드할 때는 `../tokenpilot` 체크아웃을 소스로 포함하거나(`-PtokenpilotDir=...`로 위치 변경) `mavenLocal`에서 가져옵니다.
 - Token Pilot의 Spring AI advisor는 가격표가 없는 모델(`UNPRICED`)이나 요청·응답 모델이 다른 호출(`RECONCILIATION_REQUIRED`)을 원장에 기록하지 않습니다. 이 SDK는 `ChatClient`에 `UnreconciledUsageAdvisor`를 붙여 그런 호출도 토큰과 함께 비용 없이 보냅니다(metadata `pricing_reconciliation`). 원장에 기록된 호출은 `LedgerListener`로만 보내므로 두 번 가지 않습니다.
 - `INGESTION_BATCH` 계약(`schemaVersion 2026-10-01`)에는 가격 미상을 표현하는 방법이 없어서, 위 호출이 배치 경로로 가면 서버에 비용 0으로 저장됩니다. 가격 미상을 구분해야 하면 `OBSERVE_V2`를 씁니다.
