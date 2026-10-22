@@ -180,6 +180,8 @@ EnforcedResult<MyResponse> result = enforcer.execute(
 
 ## 알려진 한계
 
+아래 한계 중 정책 결정이 필요한 것(스트리밍 집행, v2 metadata, 가격표 없는 모델, 기본 전송 경로, 승인 대기)은 [`docs/open-decisions.md`](docs/open-decisions.md)에 선택지와 권장안을 정리했습니다.
+
 - 판정·정산 API(`/api/control/v1/decisions`, `/reservations/{id}/settlements`)는 서버에 아직 구현되지 않았습니다(#15, #17). 이 SDK는 [`control-plane-v1.yaml`](https://github.com/tokenpliot/token-pilot-cloud-api/blob/main/docs/api/control-plane-v1.yaml) 계약을 기준으로 만들었고, 서버가 나오기 전에 `enforcement.enabled=true`로 켜면 판정 요청이 404(`INDETERMINATE`)를 받습니다. `on-indeterminate: fail-closed`가 아니면 호출은 막히지 않습니다.
 - 집행 advisor는 동기 `ChatClient.call()`만 다룹니다. 스트리밍(`stream()`)에는 붙지 않습니다.
 - `REQUIRE_APPROVAL` 집행은 `approvalId`와 함께 호출을 막는 데까지입니다. 승인 상태 조회(`GET /approvals/{id}`)와 승인 후 재실행은 앱이 같은 `requestId`로 다시 호출해 처리합니다.
