@@ -29,6 +29,7 @@ public class TokenPilotClientAutoConfiguration {
     public TokenPilotClient tokenPilotClient(TokenPilotClientProperties properties) {
         return TokenPilotClient.create(TokenPilotClientConfig.builder()
             .endpoint(properties.getEndpoint())
+            .ingestionApi(properties.getIngestionApi())
             .apiKey(properties.getApiKey())
             .projectKey(properties.getProjectKey())
             .environment(properties.getEnvironment())

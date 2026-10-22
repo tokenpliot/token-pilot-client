@@ -6,6 +6,7 @@ import java.util.Map;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import io.tokenpilot.client.IngestionApi;
 import io.tokenpilot.client.TokenPilotClientConfig;
 import io.tokenpilot.client.tokenpilot.TokenPilotLedgerForwarder;
 
@@ -15,6 +16,8 @@ public class TokenPilotClientProperties {
 
     /** Base URL of the Control Plane API. Setting it turns the client on. */
     private String endpoint;
+    /** {@code ingestion-batch} (default) or {@code observe-v2} (the Observe ledger; the server must enable it). */
+    private IngestionApi ingestionApi = IngestionApi.INGESTION_BATCH;
     /** Project API key ({@code X-API-Key}). */
     private String apiKey;
     private String projectKey;
@@ -37,6 +40,14 @@ public class TokenPilotClientProperties {
 
     public void setEndpoint(String endpoint) {
         this.endpoint = endpoint;
+    }
+
+    public IngestionApi getIngestionApi() {
+        return ingestionApi;
+    }
+
+    public void setIngestionApi(IngestionApi ingestionApi) {
+        this.ingestionApi = ingestionApi;
     }
 
     public String getApiKey() {

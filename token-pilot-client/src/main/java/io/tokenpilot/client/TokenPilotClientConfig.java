@@ -16,6 +16,7 @@ public final class TokenPilotClientConfig {
     /** Server limit on a batch request body (1 MiB). */
     public static final int MAX_BATCH_BYTES = 1024 * 1024;
 
+    private final IngestionApi ingestionApi;
     private final URI endpoint;
     private final String apiKey;
     private final String projectKey;
@@ -33,6 +34,7 @@ public final class TokenPilotClientConfig {
     private final DeliveryListener deliveryListener;
 
     private TokenPilotClientConfig(Builder builder) {
+        this.ingestionApi = Objects.requireNonNull(builder.ingestionApi, "ingestionApi must not be null");
         this.endpoint = requireEndpoint(builder.endpoint);
         this.apiKey = requireText("apiKey", builder.apiKey);
         if (!apiKey.chars().allMatch(c -> c > 0x20 && c < 0x7f)) {
@@ -61,6 +63,10 @@ public final class TokenPilotClientConfig {
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    public IngestionApi ingestionApi() {
+        return ingestionApi;
     }
 
     public URI endpoint() {
@@ -126,7 +132,8 @@ public final class TokenPilotClientConfig {
     /** The API key is never printed. */
     @Override
     public String toString() {
-        return "TokenPilotClientConfig[endpoint=" + endpoint + ", projectKey=" + projectKey
+        return "TokenPilotClientConfig[endpoint=" + endpoint + ", ingestionApi=" + ingestionApi
+            + ", projectKey=" + projectKey
             + ", environment=" + environment + ", maxBatchSize=" + maxBatchSize + ", queueCapacity=" + queueCapacity
             + ", flushInterval=" + flushInterval + ", maxAttempts=" + maxAttempts + "]";
     }
@@ -167,6 +174,7 @@ public final class TokenPilotClientConfig {
 
     public static final class Builder {
 
+        private IngestionApi ingestionApi = IngestionApi.INGESTION_BATCH;
         private URI endpoint;
         private String apiKey;
         private String projectKey;
@@ -194,6 +202,12 @@ public final class TokenPilotClientConfig {
 
         public Builder endpoint(String endpoint) {
             return endpoint(URI.create(endpoint));
+        }
+
+        /** Endpoint that receives the events; defaults to {@link IngestionApi#INGESTION_BATCH}. */
+        public Builder ingestionApi(IngestionApi ingestionApi) {
+            this.ingestionApi = ingestionApi;
+            return this;
         }
 
         /** Project API key, sent as the {@code X-API-Key} header. */

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import io.tokenpilot.client.ClientStats;
+import io.tokenpilot.client.IngestionApi;
 import io.tokenpilot.client.TokenPilotClient;
 import io.tokenpilot.client.TokenPilotClientConfig;
 import io.tokenpilot.client.tokenpilot.TokenPilotLedgerForwarder;
@@ -20,7 +21,8 @@ import io.tokenpilot.core.internal.LedgerComponents;
  * Customer-app fixture: records LLM calls through the Token Pilot ledger and lets the SDK ship them.
  *
  * <p>Environment: {@code TP_ENDPOINT}, {@code TP_API_KEY}, {@code TP_PROJECT_KEY}, {@code TP_ENVIRONMENT},
- * optional {@code TP_CALLS} (default 5). Exits 0 when every call was delivered (or the endpoint was expected to
+ * optional {@code TP_CALLS} (default 5) and {@code TP_INGESTION_API} ({@code INGESTION_BATCH} or
+ * {@code OBSERVE_V2}). Exits 0 when every call was delivered (or the endpoint was expected to
  * be down, {@code TP_EXPECT_DOWN=true}, and every ledger call still returned quickly).
  */
 public final class ObserveFixture {
@@ -31,6 +33,7 @@ public final class ObserveFixture {
 
         TokenPilotClient client = TokenPilotClient.create(TokenPilotClientConfig.builder()
             .endpoint(System.getenv("TP_ENDPOINT"))
+            .ingestionApi(IngestionApi.valueOf(System.getenv().getOrDefault("TP_INGESTION_API", "INGESTION_BATCH")))
             .apiKey(System.getenv("TP_API_KEY"))
             .projectKey(System.getenv("TP_PROJECT_KEY"))
             .environment(System.getenv("TP_ENVIRONMENT"))

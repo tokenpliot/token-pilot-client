@@ -14,12 +14,27 @@
 ## 동작 보장 (Observe)
 
 - `record()`는 크기가 제한된 메모리 큐에 넣기만 합니다. 네트워크를 기다리지 않고 전송 문제로 예외를 던지지 않으므로, Control Plane이 느리거나 내려가도 LLM 호출은 그대로 진행됩니다. 큐가 가득 차면 이벤트를 버리고 `QUEUE_FULL`로 집계합니다.
-- 별도 스레드 하나가 최대 100건 또는 512KiB(설정 가능, 서버 한도 1MiB) 단위로 `POST /api/ingestion/events/batch`에 보냅니다.
+- 별도 스레드 하나가 이벤트를 보냅니다. 기본 경로는 최대 100건 또는 512KiB(설정 가능, 서버 한도 1MiB) 단위의 `POST /api/ingestion/events/batch`이고, `ingestionApi(OBSERVE_V2)`를 고르면 Observe 원장 경로로 한 건씩 보냅니다(아래 [전송 경로](#전송-경로)).
 - 네트워크 오류, 타임아웃, 5xx, 429, `retryable=true` 항목은 지수 백오프(전체 지터)로 최대 `maxAttempts`번 다시 보냅니다. 재시도는 같은 불변 이벤트를 그대로 보내므로 서버가 `eventId`로 중복을 걸러 `DUPLICATE`로 답합니다(중복 회계 없음).
 - 401/403/404/400처럼 요청 전체가 거부되면 재시도하지 않고 `REQUEST_REFUSED`로 버립니다. 413이면 배치를 반으로 나눠 다시 보냅니다.
 - `close()`는 새 이벤트를 받지 않고, 큐에 남은 이벤트를 `shutdownTimeout`까지 전송한 뒤 남은 것은 `SHUTDOWN_TIMEOUT`으로 집계합니다.
 - 모든 이벤트는 결국 전달(`created`/`duplicates`)되거나 사유별로 버려집니다(`dropped`). `stats()`와 `DeliveryListener`로 확인할 수 있습니다. API 키와 metadata 값은 로그나 통계에 남기지 않습니다.
 - 원문 prompt/completion을 보내지 않습니다. `prompt`, `system_prompt`, `completion`, `messages`, `content`, `response` metadata 키는 전송 전에 제거합니다.
+
+## 전송 경로
+
+| | `INGESTION_BATCH` (기본) | `OBSERVE_V2` |
+| --- | --- | --- |
+| 서버 경로 | `POST /api/ingestion/events/batch` | `POST /api/v2/observe/events` |
+| 저장 위치 | 기존 사용량 테이블(기존 대시보드·예산 집계) | Observe 원장(`/api/observe/ledger/*` 조회, 미정산·가격 미상 집계) |
+| 비용 | 클라이언트가 계산한 USD를 보냄 | 보내지 않음. 서버가 자기 가격표로 계산하고, 계산할 수 없으면 0이 아니라 가격 미상(`UNPRICED`)으로 남김 |
+| 요청 단위 | 최대 100건 배치 | 한 건씩, 같은 스레드에서 순서대로. 네트워크·5xx 실패가 나면 그 회차를 멈추고 남은 이벤트만 다시 보냄 |
+| 보내지 않는 값 | 없음 | `totalTokens`, 비용, `pricingVersion`, `sourceType`, metadata(`trace_id` 포함). 서버 v2 계약에 해당 필드가 없음 |
+| 서버 설정 | 없음 | `token-pilot.observe.ingestion.enabled=true`가 필요. 꺼져 있으면 404로 거부되어 `REQUEST_REFUSED`로 버려짐 |
+
+`OBSERVE_V2`의 토큰은 포함 관계(`INCLUSIVE_V1`)로 해석됩니다. `promptTokens`에는 캐시 토큰이, `completionTokens`에는 추론 토큰이 들어 있어야 하며, provider 응답과 Token Pilot 원장은 이미 이 형태입니다. 캐시·추론 토큰을 모르면 0이 아니라 비워서(null) 보내고, 서버는 요율이 다르면 그 이벤트를 가격 미상으로 기록합니다.
+
+기본값을 `INGESTION_BATCH`로 둔 이유는 서버의 v2 경로가 기본으로 꺼져 있어서입니다. Observe 원장을 쓰는 파일럿에서는 서버에서 v2를 켠 뒤 `OBSERVE_V2`로 바꿉니다.
 
 ## 사용법
 
@@ -63,6 +78,7 @@ LedgerManager ledger = LedgerComponents.defaultLedgerManager(pricingRegistry, co
 token-pilot:
   client:
     endpoint: https://control-plane.example.com   # 설정하면 활성화
+    ingestion-api: observe-v2                     # 생략하면 ingestion-batch
     api-key: ${TOKEN_PILOT_API_KEY}
     project-key: support-copilot
     environment: prod
@@ -80,14 +96,16 @@ token-pilot:
 | `cachedPromptTokens` / `reasoningTokens` | `cacheReadInputTokens` / `reasoningOutputTokens` |
 | `totalTokens` | `inputTokens + outputTokens`를 명시적으로 보냄. Token Pilot의 입력·출력 합계에는 캐시·추론 토큰이 이미 포함되어 있어서, 서버가 합계를 계산하면 이중 집계됨 |
 | `totalCostUsd` | 비용 통화가 USD일 때만 보냄. 다른 통화는 `cost_currency` metadata에만 남김 |
-| metadata | `usage_source`, `app_request_id`(`tokenpilot.request.id` 태그), `trace_id`, `forwardTag`로 지정한 태그만. 원장 태그에는 호출 컨텍스트의 모든 문자열이 들어 있으므로 전부 보내지 않음 |
+| metadata | `usage_source`, `app_request_id`(`tokenpilot.request.id` 태그), `trace_id`, `forwardTag`로 지정한 태그만. 원장 태그에는 호출 컨텍스트의 모든 문자열이 들어 있으므로 전부 보내지 않음. Token Pilot은 요청 id를 만들지 않으므로 `app_request_id`는 앱이 `ChatClient` advisor param(`a.param("tokenpilot.request.id", id)`)으로 넘길 때만 채워짐 |
 | `pricingVersion`, `sourceType` | 기본값 `tokenpilot-local`, `tokenpilot-java` |
 
 ## 알려진 한계
 
 - `token-pilot-core`는 아직 배포되지 않았습니다. 빌드할 때는 `../tokenpilot` 체크아웃을 소스로 포함하거나(`-PtokenpilotDir=...`로 위치 변경) `mavenLocal`에서 가져옵니다.
-- 서버 계약(`schemaVersion 2026-10-01`)에는 가격 미상(unpriced)을 표현하는 방법이 없습니다. Token Pilot 원장도 가격표가 없는 모델을 0 USD로 기록하므로, 서버에는 0으로 저장됩니다.
-- 서버가 `Retry-After`를 주지 않아 재시도 간격은 클라이언트 설정으로 정합니다.
+- Token Pilot의 Spring AI advisor는 가격표가 없는 모델이나 요청·응답 모델이 다른 호출을 원장에 기록하지 않습니다(`RECONCILED`일 때만 `LedgerListener` 호출). 그런 호출은 이 SDK로 전달되지 않으므로 Control Plane에도 남지 않습니다. 바꾸려면 `tokenpilot` 쪽 변경이 필요합니다.
+- `INGESTION_BATCH` 계약(`schemaVersion 2026-10-01`)에는 가격 미상을 표현하는 방법이 없습니다. 가격 미상을 구분해야 하면 `OBSERVE_V2`를 씁니다.
+- Token Pilot 예산 기능(`token-pilot.budget.enabled=true`)을 켜면 advisor가 `LedgerListener` 대신 예약 정산 경로를 써서 이 SDK의 원장 전달이 동작하지 않습니다.
+- `INGESTION_BATCH`와 v2 모두 `Retry-After`를 주지 않아 재시도 간격은 클라이언트 설정으로 정합니다.
 - 큐는 프로세스 메모리에만 있습니다. 프로세스가 비정상 종료되면 아직 보내지 못한 이벤트는 사라집니다(디스크 버퍼는 범위 밖).
 - 재시도를 모두 실패하면 배치마다 WARNING 로그를 남깁니다. Control Plane이 오래 내려가 있으면 로그가 많아질 수 있습니다.
 
@@ -100,6 +118,7 @@ git clone https://github.com/tokenpliot/tokenpilot ../tokenpilot   # token-pilot
 # 고객 앱 fixture (의존성 하나): 실제 Control Plane으로 전송
 cd fixtures/plain-java-app
 TP_ENDPOINT=http://localhost:8080 TP_API_KEY=... TP_PROJECT_KEY=... TP_ENVIRONMENT=prod ../../gradlew run
+# Observe 원장 경로: TP_INGESTION_API=OBSERVE_V2 를 추가
 ```
 
 JDK 25 toolchain이 필요합니다. `token-pilot-client`는 `--release 17`로 컴파일됩니다.

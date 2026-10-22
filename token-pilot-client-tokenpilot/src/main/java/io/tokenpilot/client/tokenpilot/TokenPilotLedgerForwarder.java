@@ -38,7 +38,10 @@ import io.tokenpilot.core.domain.TokenUsageDetails;
  */
 public final class TokenPilotLedgerForwarder implements LedgerListener {
 
-    /** Ledger tag the Spring AI adapter fills with the call's request id. */
+    /**
+     * Ledger tag holding the application's request id. Token Pilot does not generate it: it is present only when
+     * the application passes it as a ChatClient advisor param ({@code a.param("tokenpilot.request.id", id)}).
+     */
     public static final String REQUEST_ID_TAG = "tokenpilot.request.id";
     public static final String DEFAULT_PRICING_VERSION = "tokenpilot-local";
     public static final String SOURCE_TYPE = "tokenpilot-java";

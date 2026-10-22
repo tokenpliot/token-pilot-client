@@ -14,4 +14,7 @@ dependencies {
     testImplementation "org.springframework.boot:spring-boot-autoconfigure:${versions.springBoot}"
     testImplementation testFixtures(project(':token-pilot-client'))
     testImplementation "org.springframework.boot:spring-boot-test:${versions.springBoot}"
+    // ChatClient end-to-end path: Token Pilot's own auto-configuration and Spring AI advisor, with a fake model.
+    testImplementation "cloud.token-pilot:token-pilot-autoconfigure:${versions.tokenpilot}"
+    testImplementation "cloud.token-pilot:token-pilot-spring-ai:${versions.tokenpilot}"
 }

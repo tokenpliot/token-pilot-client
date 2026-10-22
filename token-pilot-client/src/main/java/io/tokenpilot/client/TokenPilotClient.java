@@ -18,10 +18,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
-import io.tokenpilot.client.internal.BatchEncoder;
 import io.tokenpilot.client.internal.BatchSender;
-import io.tokenpilot.client.internal.BatchSender.ItemResult;
-import io.tokenpilot.client.internal.BatchSender.Outcome;
+import io.tokenpilot.client.internal.ObserveV2Sender;
+import io.tokenpilot.client.internal.Transport;
+import io.tokenpilot.client.internal.Transport.ItemResult;
+import io.tokenpilot.client.internal.Transport.Outcome;
 
 /**
  * Sends usage events to the Control Plane in the background (Observe mode).
@@ -39,8 +40,7 @@ public final class TokenPilotClient implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(TokenPilotClient.class.getName());
 
     private final TokenPilotClientConfig config;
-    private final BatchEncoder encoder;
-    private final BatchSender sender;
+    private final Transport transport;
     private final DeliveryListener listener;
     private final BlockingQueue<UsageEvent> queue;
     private final ScheduledExecutorService executor;
@@ -63,9 +63,7 @@ public final class TokenPilotClient implements AutoCloseable {
 
     private TokenPilotClient(TokenPilotClientConfig config) {
         this.config = config;
-        this.encoder = new BatchEncoder(config.projectKey(), config.environment());
-        this.sender = new BatchSender(config.endpoint(), config.apiKey(), config.connectTimeout(),
-            config.requestTimeout());
+        this.transport = transport(config);
         this.listener = config.deliveryListener();
         this.queue = new ArrayBlockingQueue<>(config.queueCapacity());
         for (DropReason reason : DropReason.values()) {
@@ -190,17 +188,13 @@ public final class TokenPilotClient implements AutoCloseable {
         }
     }
 
-    private void deliver(List<UsageEvent> batch) throws InterruptedException {
-        byte[] body = encoder.encode(batch);
-        if (body.length > config.maxBatchBytes()) {
-            if (batch.size() == 1) {
-                dropAll(batch, DropReason.PAYLOAD_TOO_LARGE, body.length + " bytes");
-                return;
-            }
-            deliverHalves(batch);
-            return;
-        }
-        sendWithRetry(batch, body);
+    private static Transport transport(TokenPilotClientConfig config) {
+        return switch (config.ingestionApi()) {
+            case OBSERVE_V2 -> new ObserveV2Sender(config.endpoint(), config.apiKey(), config.projectKey(),
+                config.environment(), config.connectTimeout(), config.requestTimeout());
+            case INGESTION_BATCH -> new BatchSender(config.endpoint(), config.apiKey(), config.projectKey(),
+                config.environment(), config.maxBatchBytes(), config.connectTimeout(), config.requestTimeout());
+        };
     }
 
     private void deliverHalves(List<UsageEvent> batch) throws InterruptedException {
@@ -224,13 +218,12 @@ public final class TokenPilotClient implements AutoCloseable {
         }
     }
 
-    private void sendWithRetry(List<UsageEvent> batch, byte[] body) throws InterruptedException {
+    private void deliver(List<UsageEvent> batch) throws InterruptedException {
         // Events of this batch not yet delivered, dropped, or handed to deliverHalves (which settles its own).
         List<UsageEvent> remaining = batch;
         try {
-            byte[] payload = body;
             for (int attempt = 1; ; attempt++) {
-                Outcome outcome = sender.send(payload, remaining.size());
+                Outcome outcome = transport.send(remaining);
                 String retryReason;
 
                 if (outcome instanceof Outcome.Items items) {
@@ -240,11 +233,11 @@ public final class TokenPilotClient implements AutoCloseable {
                         return;
                     }
                     retryReason = "server asked to retry " + again.size() + " item(s)";
-                } else if (outcome instanceof Outcome.TooLarge) {
+                } else if (outcome instanceof Outcome.TooLarge large) {
                     List<UsageEvent> tooLarge = remaining;
                     remaining = List.of();
                     if (tooLarge.size() == 1) {
-                        dropAll(tooLarge, DropReason.PAYLOAD_TOO_LARGE, "HTTP 413");
+                        dropAll(tooLarge, DropReason.PAYLOAD_TOO_LARGE, large.detail());
                     } else {
                         deliverHalves(tooLarge);
                     }
@@ -277,9 +270,6 @@ public final class TokenPilotClient implements AutoCloseable {
                     remaining = List.of();
                     dropAll(unsent, DropReason.SHUTDOWN_TIMEOUT, "client closed while retrying");
                     return;
-                }
-                if (remaining != batch) {
-                    payload = encoder.encode(remaining);
                 }
             }
         } catch (InterruptedException | RuntimeException exception) {
