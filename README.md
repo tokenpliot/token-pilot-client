@@ -1,13 +1,13 @@
 # Token Pilot Client (Java)
 
-고객 Java 애플리케이션의 LLM 사용량을 Token Pilot Control Plane(`token-pilot-cloud-api`)으로 보내는 Client SDK입니다. 현재 범위는 **Observe 모드**(사용량 전송만, 호출 차단 없음)이며 [token-pilot-cloud-api#12](https://github.com/tokenpliot/token-pilot-cloud-api/issues/12)를 구현합니다. Enforce 연동(#18)은 서버의 판정·예약 API(#14~#17) 이후에 다룹니다.
+고객 Java 애플리케이션의 LLM 사용량을 Token Pilot Control Plane(`token-pilot-cloud-api`)으로 보내고, 고객이 고른 범위에서만 Control Plane 판정을 호출 전에 집행하는 Client SDK입니다. 기본은 **Observe 모드**(사용량 전송만, 호출 차단 없음, [#12](https://github.com/tokenpliot/token-pilot-cloud-api/issues/12))이고, 판정·집행은 명시적으로 켤 때만 동작합니다([#18](https://github.com/tokenpliot/token-pilot-cloud-api/issues/18), 아래 [판정과 집행](#판정과-집행-enforce)).
 
 ## 모듈
 
 | 모듈 | Java | 의존성 | 역할 |
 | --- | --- | --- | --- |
-| `token-pilot-client` | 17+ | 없음(JDK만) | 이벤트 모델, 계약 검증, 비동기 배치 전송, 재시도, 통계 |
-| `token-pilot-client-tokenpilot` | 25 | `token-pilot-core`, (선택) Spring Boot 4.1 | Token Pilot 원장(`LedgerListener`) 이벤트 전달, Spring Boot 자동 구성 |
+| `token-pilot-client` | 17+ | 없음(JDK만) | 이벤트 모델, 계약 검증, 비동기 배치 전송, 재시도, 통계, 판정·집행·예약 정산(`io.tokenpilot.client.enforce`) |
+| `token-pilot-client-tokenpilot` | 25 | `token-pilot-core`, (선택) Spring Boot 4.1, (선택) Spring AI 2.0 | Token Pilot 원장(`LedgerListener`) 이벤트 전달, `ChatClient` 집행 advisor, Spring Boot 자동 구성 |
 
 `token-pilot-client`는 Jackson을 포함해 런타임 의존성이 없습니다. Jackson 2를 쓰는 앱과 Jackson 3을 쓰는 앱(Spring Boot 4) 모두에서 충돌 없이 쓸 수 있게 하기 위해서입니다.
 
@@ -87,6 +87,85 @@ token-pilot:
       tenant: tenant_id
 ```
 
+## 판정과 집행 (Enforce)
+
+[ADR 0001](https://github.com/tokenpliot/token-pilot-cloud-api/blob/main/docs/adr/0001-decision-enforcement-boundary.md)의 책임 분리를 따릅니다. Control Plane은 판정만 하고, 막을지는 이 SDK가 **고객 설정으로만** 정합니다.
+
+| 판정 \ 모드 | `OBSERVE` (기본) | `ADVISORY` | `ENFORCE` |
+| --- | --- | --- | --- |
+| `ALLOW` | 진행 | 진행 | 진행 |
+| `DENY_POLICY`, `DENY_BUDGET` | 진행 | 진행 + 권고 | 집행 범위면 차단, 아니면 진행 + 권고 |
+| `REQUIRE_APPROVAL` | 진행 | 진행 + 권고 | 집행 범위면 승인 대기(차단), 아니면 진행 + 권고 |
+| `INDETERMINATE` | 진행 | 진행 + 권고 | `on-indeterminate: fail-closed`면 차단, 아니면 진행 + 권고 |
+| `CONTROL_PLANE_UNAVAILABLE` | 진행 | 진행 + 권고 | `on-unavailable: fail-closed`면 차단, 아니면 진행 + 권고 |
+
+- **HTTP 오류와 통신 실패는 절대 `DENY_*`가 되지 않습니다.** 408·429·5xx·연결 실패·타임아웃은 `CONTROL_PLANE_UNAVAILABLE`, 그 밖의 4xx(401 포함)는 `INDETERMINATE`입니다. 오류 응답 본문이 `DENY_*`를 담고 있어도 무시합니다.
+- **판정 대기 시간에 상한이 있습니다.** `decision-timeout`(기본 1초, 최대 5초)을 넘기면 `CONTROL_PLANE_UNAVAILABLE`로 처리하고, 그다음은 `on-unavailable` 설정을 따릅니다.
+- **예약 정산**: `ENFORCE`에서 `ALLOW`와 함께 받은 예약은 호출 뒤 백그라운드에서 정산합니다. 성공 + 가격 확인 → `COMMIT`(실제 사용량·비용), provider에 닿기 전 실패(`CallNotDispatchedException`) → `RELEASE`, provider 예외·사용량 없음·가격 미상 → `RECONCILIATION_REQUIRED`(결과가 불명확하므로 예약을 0으로 만들지 않음). 정산은 같은 `Idempotency-Key`와 같은 본문으로 재시도하며, 실패해도 호출 결과를 바꾸지 않습니다.
+- **멱등성**: 같은 `requestId`로 다시 실행하면 판정 요청도 같은 `Idempotency-Key`(`dec:<requestId>`)로 가서 서버가 처음 판정과 예약을 돌려줍니다. 재시도할 때는 앱의 요청 id를 유지하세요.
+- 판정 요청에는 토큰 추정치와 모델만 갑니다. 원문 prompt는 입력 토큰 추정에만 쓰이고 전송되지 않습니다.
+
+### Spring Boot + Spring AI
+
+`enforcement.enabled=true`일 때만 모든 `ChatClient`에 advisor가 붙습니다. 켜면 `OBSERVE`에서도 호출마다 판정을 기다리므로(최대 `decision-timeout`) 기본은 꺼져 있습니다.
+
+```yaml
+token-pilot:
+  client:
+    endpoint: https://control-plane.example.com
+    api-key: ${TOKEN_PILOT_API_KEY}     # 프로젝트·환경 키 = 프로젝트/환경 범위
+    project-key: support-copilot
+    environment: prod
+    provider: openai
+    enforcement:
+      enabled: true
+      mode: advisory                    # 이 키의 프로젝트/환경 기본값
+      decision-timeout: 800ms
+      endpoints:                        # 호출 지점별 opt-in
+        checkout-summary:
+          mode: enforce
+          enforced-outcomes: [DENY_POLICY, DENY_BUDGET]
+          on-unavailable: fail-closed   # 생략하면 위 기본값(fail-open)을 물려받음
+```
+
+```java
+try {
+    ChatClientResponse response = chatClient.prompt()
+        .user(question)
+        .advisors(a -> a.param("tokenpilot.request.id", commandId)              // 재시도 시 같은 값
+                        .param("tokenpilot.enforcement.endpoint", "checkout-summary"))
+        .call()
+        .chatClientResponse();
+    response.context().get("tokenpilot.enforcement.outcome");   // ALLOW, DENY_BUDGET, ... (권고 표시용)
+    response.context().get("tokenpilot.enforcement.action");    // PROCEED, PROCEED_WITH_ADVISORY
+} catch (EnforcementException blocked) {
+    blocked.decision().outcome();   // 차단 원인: 정책 거부인지, 판정 불가·장애(fail-closed)인지
+    blocked.approvalId();           // REQUIRE_APPROVAL 집행 시
+}
+```
+
+advisor는 Token Pilot `LedgerAdvisor` 바로 바깥(`LOWEST_PRECEDENCE - 2`)에서 돌기 때문에, 차단된 호출은 Token Pilot 원장과 모델 어느 쪽에도 닿지 않습니다. 실제 사용량은 Token Pilot의 `UsageExtractor`로 읽고, 비용은 Token Pilot 가격표(`token-pilot.pricing.plans`)로 계산합니다. 응답 모델의 USD 가격이 없으면 비용을 추정하지 않고 `RECONCILIATION_REQUIRED`로 정산합니다.
+
+### 평범한 Java
+
+```java
+ControlPlaneEnforcer enforcer = ControlPlaneEnforcer.create(EnforcerConfig.builder()
+    .endpoint("https://control-plane.example.com")
+    .apiKey(System.getenv("TOKEN_PILOT_API_KEY"))
+    .environment("prod")
+    .policy(EnforcementPolicy.builder()
+        .defaults(EnforcementSettings.defaults())                       // OBSERVE
+        .endpoint("checkout-summary", EnforcementSettings.enforce())    // 이 호출 지점만 ENFORCE
+        .build())
+    .build());
+
+EnforcedResult<MyResponse> result = enforcer.execute(
+    CallRequest.builder().requestId(commandId).endpoint("checkout-summary")
+        .provider("openai").model("gpt-4o-mini").estimatedInputTokens(1200).maxOutputTokens(800).build(),
+    () -> provider.call(...),                                   // 호출 전 실패면 CallNotDispatchedException
+    response -> ActualUsage.priced(response.inputTokens(), response.outputTokens(), promptCost, completionCost));
+```
+
 ## 원장 이벤트 매핑
 
 | Control Plane 필드 | 값 |
@@ -101,6 +180,9 @@ token-pilot:
 
 ## 알려진 한계
 
+- 판정·정산 API(`/api/control/v1/decisions`, `/reservations/{id}/settlements`)는 서버에 아직 구현되지 않았습니다(#15, #17). 이 SDK는 [`control-plane-v1.yaml`](https://github.com/tokenpliot/token-pilot-cloud-api/blob/main/docs/api/control-plane-v1.yaml) 계약을 기준으로 만들었고, 서버가 나오기 전에 `enforcement.enabled=true`로 켜면 판정 요청이 404(`INDETERMINATE`)를 받습니다. `on-indeterminate: fail-closed`가 아니면 호출은 막히지 않습니다.
+- 집행 advisor는 동기 `ChatClient.call()`만 다룹니다. 스트리밍(`stream()`)에는 붙지 않습니다.
+- `REQUIRE_APPROVAL` 집행은 `approvalId`와 함께 호출을 막는 데까지입니다. 승인 상태 조회(`GET /approvals/{id}`)와 승인 후 재실행은 앱이 같은 `requestId`로 다시 호출해 처리합니다.
 - `token-pilot-core`는 아직 배포되지 않았습니다. 빌드할 때는 `../tokenpilot` 체크아웃을 소스로 포함하거나(`-PtokenpilotDir=...`로 위치 변경) `mavenLocal`에서 가져옵니다.
 - Token Pilot의 Spring AI advisor는 가격표가 없는 모델(`UNPRICED`)이나 요청·응답 모델이 다른 호출(`RECONCILIATION_REQUIRED`)을 원장에 기록하지 않습니다. 이 SDK는 `ChatClient`에 `UnreconciledUsageAdvisor`를 붙여 그런 호출도 토큰과 함께 비용 없이 보냅니다(metadata `pricing_reconciliation`). 원장에 기록된 호출은 `LedgerListener`로만 보내므로 두 번 가지 않습니다.
 - `INGESTION_BATCH` 계약(`schemaVersion 2026-10-01`)에는 가격 미상을 표현하는 방법이 없어서, 위 호출이 배치 경로로 가면 서버에 비용 0으로 저장됩니다. 가격 미상을 구분해야 하면 `OBSERVE_V2`를 씁니다.
