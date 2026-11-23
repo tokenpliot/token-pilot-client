@@ -184,7 +184,7 @@ EnforcedResult<MyResponse> result = enforcer.execute(
 
 이 SDK의 설계 결정(스트리밍 집행, v2 metadata, 원장에 안 남는 호출, 기본 전송 경로, 승인 대기)과 그 이유는 [`docs/decisions.md`](docs/decisions.md)에 있습니다.
 
-- 판정·정산 API(`/api/control/v1/decisions`, `/reservations/{id}/settlements`)는 서버에 아직 구현되지 않았습니다(#15, #17). 이 SDK는 [`control-plane-v1.yaml`](https://github.com/tokenpliot/token-pilot-cloud-api/blob/main/docs/api/control-plane-v1.yaml) 계약을 기준으로 만들었고, 서버가 나오기 전에 `enforcement.enabled=true`로 켜면 판정 요청이 404(`INDETERMINATE`)를 받습니다. `on-indeterminate: fail-closed`가 아니면 호출은 막히지 않습니다.
+- 판정·정산 API는 서버에서 `token-pilot.decision.enabled=true`일 때만 있습니다. 꺼져 있으면 판정 요청이 404(`INDETERMINATE`)를 받고, `on-indeterminate: fail-closed`가 아니면 호출은 막히지 않습니다. 서버가 `ENFORCE` 요청에 예약을 발급하려면 `token-pilot.decision.enforce.enabled=true`도 필요합니다. 꺼져 있으면 `effectiveMode`가 `ADVISORY`이고 예약 없이 판정만 옵니다(거부 집행은 이 SDK 설정대로 그대로 합니다).
 - `ENFORCE` 범위의 스트리밍 호출은 집행 대신 거부됩니다(위 [스트리밍](#spring-boot--spring-ai)). 스트리밍을 집행해야 하면 별도 작업이 필요합니다.
 - `REQUIRE_APPROVAL` 집행은 `approvalId`와 함께 호출을 막는 데까지입니다. 승인 상태 조회(`GET /approvals/{id}`)와 승인 후 재실행은 파일럿 범위 밖이며, 앱이 같은 `requestId`로 다시 호출해 처리합니다.
 - `token-pilot-core`는 아직 배포되지 않았습니다. 빌드할 때는 `../tokenpilot` 체크아웃을 소스로 포함하거나(`-PtokenpilotDir=...`로 위치 변경) `mavenLocal`에서 가져옵니다.
@@ -205,6 +205,12 @@ git clone https://github.com/tokenpliot/tokenpilot ../tokenpilot   # token-pilot
 cd fixtures/plain-java-app
 TP_ENDPOINT=http://localhost:8080 TP_API_KEY=... TP_PROJECT_KEY=... TP_ENVIRONMENT=prod ../../gradlew run
 # Observe 원장 경로: TP_INGESTION_API=OBSERVE_V2 를 추가
+cd ../..
+
+# 실제 Control Plane 대상 Enforce E2E (옆 디렉터리의 token-pilot-cloud-api 체크아웃으로 서버를 띄움)
+(cd ../token-pilot-cloud-api && scripts/e2e/enforce-pilot.sh up) && source /tmp/tp-e2e/env
+./gradlew :token-pilot-client:test --tests '*RealServerEnforceE2ETest'
+(cd ../token-pilot-cloud-api && scripts/e2e/enforce-pilot.sh down)
 ```
 
 JDK 25 toolchain이 필요합니다. `token-pilot-client`는 `--release 17`로 컴파일됩니다.

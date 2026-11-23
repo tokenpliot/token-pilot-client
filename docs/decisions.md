@@ -74,12 +74,14 @@ B의 원래 걱정(이중 집계)은 조건이 겹치지 않아서 생기지 않
 - 승인 흐름에는 사람의 응답 시간(분~시간)이 끼어서 provider 호출 경로에서 기다리는 형태가 맞지 않는다.
 - 필요해지면 앱이 같은 `requestId`로 다시 호출하는 방식을 기준으로 헬퍼를 설계한다.
 
-## 서버 구현(#15, #17)과 맞출 것
+## 서버 구현(#15, #17)과 맞춘 결과
 
-결정은 아니지만, 서버 판정·예약 API가 나오면 바로 확인해야 하는 계약 지점이다. SDK는 `docs/api/control-plane-v1.yaml`을 기준으로 만들었다.
+서버 판정·예약 API가 나온 뒤 실제 서버(MySQL, `token-pilot.decision.enforce.enabled=true`)로 확인했다(`RealServerEnforceE2ETest`, cloud-api#18).
 
-- **`Idempotency-Key` 형식**: 판정은 `dec:<requestId>`, 정산은 `stl:<reservationId>:<COMMIT|RELEASE|RECONCILIATION_REQUIRED>`. 8자 미만이나 128자 초과면 `dec:<sha256>` 형태로 바꾼다.
-- **정산 본문의 `occurredAt`**: 정산을 예약할 때 한 번 정하고 재시도에는 같은 본문을 쓴다. 다른 시점에 같은 결과를 다시 보내면 본문이 달라 409가 된다. 서버의 "종료 상태에 같은 정산 → 원래 결과" 규칙이 본문 비교인지 결과 비교인지 맞춘다.
-- **COMMIT 비용 분할**: 계약이 prompt·completion 비용을 따로 요구해서, SDK는 입력 토큰만으로 한 번 더 계산해 나눈다. 두 값의 합은 총비용과 같다(소수 6자리 올림).
-- **API가 없을 때**: 서버 배포 전에 판정을 요청하면 404 → `INDETERMINATE`다. `on-indeterminate: fail-closed`를 고른 고객은 그동안 모든 호출이 막힌다.
+- **`Idempotency-Key` 형식**: 판정은 `dec:<requestId>`, 정산은 `stl:<reservationId>:<COMMIT|RELEASE|RECONCILIATION_REQUIRED>`. 8자 미만이나 128자 초과면 `dec:<sha256>` 형태로 바꾼다. 서버는 판정 키로 예약도 잡아, 같은 판정의 재전송은 같은 판정·같은 예약을 받는다(거부 판정 재시도에서 같은 `decisionId` 확인).
+- **정산 본문의 `occurredAt`**: 정산을 예약할 때 한 번 정하고 재시도에는 같은 본문을 쓴다. 서버도 결과가 아니라 본문(`occurredAt` 포함) 비교라 맞다. 다른 시점에 같은 결과를 다시 보내면 409다.
+- **COMMIT 비용 분할**: 서버는 `totalCostUsd`만 금액 기준으로 쓰고 분할은 비교만 한다. COMMIT·RELEASE·RECONCILIATION_REQUIRED가 각각 COMMITTED·RELEASED·RECONCILIATION_REQUIRED로 정산되는 것을 확인했다.
+- **API가 없을 때**: 서버의 `token-pilot.decision.enabled`가 꺼져 있으면 404 → `INDETERMINATE`다. `on-indeterminate: fail-closed`를 고른 고객은 그동안 모든 호출이 막힌다. Enforce 예약만 꺼져 있으면 `effectiveMode: ADVISORY`로 예약 없이 판정이 온다.
 - **판정 응답의 `requestId` 불일치**: 요청과 다른 `requestId`를 담은 200 응답은 `INDETERMINATE`(`UNREADABLE_RESPONSE`)로 본다.
+- **미정산 예약과 한도**: 정산 전 예약도 월 한도를 잡는다. 같은 범위의 다른 호출은 `DENY_BUDGET`(`RESERVED_BUDGET_EXCEEDED`)이고 SDK는 정책 거부로 집행한다.
+- **확인하지 못한 것**: 판정 API 지연(timeout)은 실제 서버로 재현하지 않았다. fake 서버 테스트(`ControlPlaneEnforcerTest`)로만 확인했다.
