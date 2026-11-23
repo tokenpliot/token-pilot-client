@@ -76,12 +76,12 @@ B의 원래 걱정(이중 집계)은 조건이 겹치지 않아서 생기지 않
 
 ## 서버 구현(#15, #17)과 맞춘 결과
 
-서버 판정·예약 API가 나온 뒤 실제 서버(MySQL, `token-pilot.decision.enforce.enabled=true`)로 확인했다(`RealServerEnforceE2ETest`, cloud-api#18).
+서버 판정·예약 API가 나온 뒤 맞춰 본 결과다. **[실서버]**는 실제 서버(MySQL, `token-pilot.decision.enforce.enabled=true`)를 상대로 `RealServerEnforceE2ETest`(cloud-api#18)에서 돌린 것이고, **[서버 코드·테스트]**는 서버 구현과 그 테스트로만 확인한 것이다.
 
-- **`Idempotency-Key` 형식**: 판정은 `dec:<requestId>`, 정산은 `stl:<reservationId>:<COMMIT|RELEASE|RECONCILIATION_REQUIRED>`. 8자 미만이나 128자 초과면 `dec:<sha256>` 형태로 바꾼다. 서버는 판정 키로 예약도 잡아, 같은 판정의 재전송은 같은 판정·같은 예약을 받는다(거부 판정 재시도에서 같은 `decisionId` 확인).
-- **정산 본문의 `occurredAt`**: 정산을 예약할 때 한 번 정하고 재시도에는 같은 본문을 쓴다. 서버도 결과가 아니라 본문(`occurredAt` 포함) 비교라 맞다. 다른 시점에 같은 결과를 다시 보내면 409다.
-- **COMMIT 비용 분할**: 서버는 `totalCostUsd`만 금액 기준으로 쓰고 분할은 비교만 한다. COMMIT·RELEASE·RECONCILIATION_REQUIRED가 각각 COMMITTED·RELEASED·RECONCILIATION_REQUIRED로 정산되는 것을 확인했다.
-- **API가 없을 때**: 서버의 `token-pilot.decision.enabled`가 꺼져 있으면 404 → `INDETERMINATE`다. `on-indeterminate: fail-closed`를 고른 고객은 그동안 모든 호출이 막힌다. Enforce 예약만 꺼져 있으면 `effectiveMode: ADVISORY`로 예약 없이 판정이 온다.
-- **판정 응답의 `requestId` 불일치**: 요청과 다른 `requestId`를 담은 200 응답은 `INDETERMINATE`(`UNREADABLE_RESPONSE`)로 본다.
-- **미정산 예약과 한도**: 정산 전 예약도 월 한도를 잡는다. 같은 범위의 다른 호출은 `DENY_BUDGET`(`RESERVED_BUDGET_EXCEEDED`)이고 SDK는 정책 거부로 집행한다.
+- **`Idempotency-Key` 형식** [실서버]: 판정은 `dec:<requestId>`, 정산은 `stl:<reservationId>:<COMMIT|RELEASE|RECONCILIATION_REQUIRED>`. 8자 미만이나 128자 초과면 `dec:<sha256>` 형태로 바꾼다. 서버는 판정 키로 예약도 잡아, 같은 판정의 재전송은 같은 판정·같은 예약을 받는다(거부 판정 재시도에서 같은 `decisionId` 확인).
+- **COMMIT 비용 분할** [실서버]: 서버는 `totalCostUsd`만 금액 기준으로 쓰고 분할은 비교만 한다. COMMIT·RELEASE·RECONCILIATION_REQUIRED가 각각 COMMITTED·RELEASED·RECONCILIATION_REQUIRED로 정산되는 것을 확인했다.
+- **미정산 예약과 한도** [실서버]: 정산 전 예약도 월 한도를 잡는다. 같은 범위의 다른 호출은 `DENY_BUDGET`(`RESERVED_BUDGET_EXCEEDED`)이고 SDK는 정책 거부로 집행한다.
+- **정산 본문의 `occurredAt`** [서버 코드·테스트]: 정산을 예약할 때 한 번 정하고 재시도에는 같은 본문을 쓴다. 서버도 결과가 아니라 본문(`occurredAt` 포함) 비교라 맞다. 다른 시점에 같은 결과를 다시 보내면 409다.
+- **API가 없을 때** [서버 코드·테스트]: 서버의 `token-pilot.decision.enabled`가 꺼져 있으면 404 → `INDETERMINATE`다. `on-indeterminate: fail-closed`를 고른 고객은 그동안 모든 호출이 막힌다. Enforce 예약만 꺼져 있으면 `effectiveMode: ADVISORY`로 예약 없이 판정이 온다.
+- **판정 응답의 `requestId` 불일치** [SDK 테스트]: 요청과 다른 `requestId`를 담은 200 응답은 `INDETERMINATE`(`UNREADABLE_RESPONSE`)로 본다. 서버는 요청 값을 그대로 돌려준다.
 - **확인하지 못한 것**: 판정 API 지연(timeout)은 실제 서버로 재현하지 않았다. fake 서버 테스트(`ControlPlaneEnforcerTest`)로만 확인했다.
